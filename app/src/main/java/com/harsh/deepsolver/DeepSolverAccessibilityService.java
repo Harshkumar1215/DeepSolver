@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.PixelFormat;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -22,18 +23,17 @@ import android.webkit.WebViewClient;
 import android.widget.ImageButton;
 import android.widget.Toast;
 
-import java.util.HashSet;
-import java.util.Set;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * DeepSolverAccessibilityService captures screen text and triggers a
- * floating web search window to find MCQ answers.
+ * DeepSolverAccessibilityService - "Lens Mode"
+ * Scans screen, places interactive dots on text, and allows targeted searching.
  */
-public class DeepSolverAccessibilityService extends AccessibilityService {
+public class DeepSolverAccessibilityService extends AccessibilityService implements OverlayService.OnHighlightClickListener {
 
-    private static final String TAG = "DeepSolverAS";
-    private static final int MAX_QUERY_LENGTH = 500;
-    private static final int FLOATING_WINDOW_HEIGHT = 800;
+    private static final String TAG = "DeepSolverLens";
+    private static final int FLOATING_WINDOW_HEIGHT = 900;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean wasReadingActive = false;
@@ -44,7 +44,7 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         windowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
-        Log.d(TAG, "Service Connected: Web Search Overlay Mode Active");
+        Log.d(TAG, "Lens Mode Active: Tap dots to search");
     }
 
     @Override
@@ -54,62 +54,62 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
             return;
         }
 
-        // Trigger search if just turned on
-        boolean triggeredByToggle = !wasReadingActive && OverlayService.isReadingActive;
-        wasReadingActive = true;
-
-        if (triggeredByToggle) {
-            performScreenScan();
+        // Trigger Lens Scan when button is toggled to Orange
+        if (!wasReadingActive && OverlayService.isReadingActive) {
+            wasReadingActive = true;
+            performLensScan();
         }
     }
 
-    private void performScreenScan() {
+    private void performLensScan() {
         AccessibilityNodeInfo rootNode = getRootInActiveWindow();
-        if (rootNode == null) {
-            showToast("No active window found");
-            return;
+        if (rootNode == null) return;
+
+        OverlayService service = OverlayService.getInstance();
+        if (service != null) {
+            service.clearHighlights();
+            showToast("Lens Scanning...");
+            scanAndAddDots(rootNode, service);
+        }
+        rootNode.recycle();
+    }
+
+    /**
+     * Recursively finds text and places interactive dots.
+     */
+    private void scanAndAddDots(AccessibilityNodeInfo node, OverlayService service) {
+        if (node == null) return;
+
+        if (node.getText() != null && !node.getText().toString().trim().isEmpty()) {
+            Rect rect = new Rect();
+            node.getBoundsInScreen(rect);
+            
+            // Add a clickable Lens dot at the text location
+            String textToSearch = node.getText().toString().trim();
+            service.addLensDot(rect.centerX(), rect.centerY(), textToSearch, this);
         }
 
-        Set<String> uniqueTexts = new HashSet<>();
-        findAllText(rootNode, uniqueTexts);
-        rootNode.recycle();
-
-        if (!uniqueTexts.isEmpty()) {
-            StringBuilder fullText = new StringBuilder();
-            for (String text : uniqueTexts) {
-                fullText.append(text).append(" ");
-            }
-
-            String queryText = fullText.toString().trim();
-            if (!queryText.isEmpty()) {
-                showToast("Scanning & Searching...");
-                openFloatingSearch(queryText);
-            }
-        } else {
-            showToast("No text found on screen");
+        for (int i = 0; i < node.getChildCount(); i++) {
+            scanAndAddDots(node.getChild(i), service);
         }
     }
 
     /**
-     * Opens a mini-browser window at the bottom of the screen.
+     * Triggered when a Lens Dot is clicked.
      */
-    private void openFloatingSearch(String queryText) {
-        // Clean query and limit length
-        String query = queryText.trim();
-        if (query.length() > MAX_QUERY_LENGTH) {
-            query = query.substring(0, MAX_QUERY_LENGTH);
-        }
+    @Override
+    public void onHighlightClick(String text) {
+        showToast("Searching: " + (text.length() > 20 ? text.substring(0, 20) + "..." : text));
+        openFloatingSearch(text);
+    }
 
-        String searchUrl = "https://www.google.com/search?q=" + Uri.encode(query);
+    private void openFloatingSearch(String queryText) {
+        String searchUrl = "https://www.google.com/search?q=" + Uri.encode(queryText);
 
         mainHandler.post(() -> {
-            // Remove previous search view if exists
             closeFloatingSearch();
 
-            if (!Settings.canDrawOverlays(this)) {
-                showToast("Please grant overlay permission");
-                return;
-            }
+            if (!Settings.canDrawOverlays(this)) return;
 
             WindowManager.LayoutParams params = new WindowManager.LayoutParams(
                     WindowManager.LayoutParams.MATCH_PARENT,
@@ -136,49 +136,18 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
                 btnClose.setOnClickListener(v -> closeFloatingSearch());
 
                 windowManager.addView(searchView, params);
-                
-                // Turn off reading mode in the main overlay
-                resetReadingState();
             } catch (Exception e) {
-                Log.e(TAG, "Error showing search window: " + e.getMessage());
+                Log.e(TAG, "Search Error: " + e.getMessage());
             }
         });
-    }
-
-    private void resetReadingState() {
-        OverlayService.isReadingActive = false;
-        OverlayService service = OverlayService.getInstance();
-        if (service != null) {
-            service.clearHighlights();
-            // We need a way to update the icon back to white border. 
-            // In OverlayService, the touch listener handles the border based on isReadingActive toggle.
-            // Since we turned it off here, we should notify the service.
-            Intent intent = new Intent(this, OverlayService.class);
-            // This is just a dummy start to trigger any logic if needed, but since we have static access:
-            // The next time the user taps, it will toggle correctly.
-        }
     }
 
     private void closeFloatingSearch() {
         if (searchView != null && windowManager != null) {
             try {
                 windowManager.removeView(searchView);
-            } catch (Exception e) {
-                Log.e(TAG, "Error removing search view: " + e.getMessage());
-            }
+            } catch (Exception ignored) {}
             searchView = null;
-        }
-    }
-
-    private void findAllText(AccessibilityNodeInfo node, Set<String> textSet) {
-        if (node == null) return;
-
-        if (node.getText() != null && !node.getText().toString().trim().isEmpty()) {
-            textSet.add(node.getText().toString().trim());
-        }
-        
-        for (int i = 0; i < node.getChildCount(); i++) {
-            findAllText(node.getChild(i), textSet);
         }
     }
 
