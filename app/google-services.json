@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "306034159657",
+    "project_id": "deep-solver",
+    "storage_bucket": "deep-solver.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:306034159657:android:b1e6ceada9f83c10d6ac38",
+        "android_client_info": {
+          "package_name": "com.harsh.deepsolver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBV8TQvivolE3l8lV6ric4Gk4TzkGGZjVA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">Deep Solver</string>
+    <string name="accessibility_service_description">Reads screen content to identify and highlight MCQ answers automatically.</string>
+    <string name="request_overlay_permission">This app requires Overlay Permission to show answers over other apps. Please enable it in settings.</string>
+    <string name="request_accessibility_permission">This app requires Accessibility Service to read screen content. Please enable it in settings.</string>
+    <string name="start_service">Start Service</string>
+    <string name="stop_service">Stop Service</string>
+    <string name="status_stopped">Service Status: Stopped</string>
+    <string name="status_running">Service Status: Running</string>
+    <string name="permission_hint">Ensure both Overlay and Accessibility permissions are granted for the app to function correctly.</string>
+    <string name="developer_label">Developer: </string>
+    <string name="developer_name">HARSH KUMAR</string>
+    <string name="about_title">About Deep Solver</string>
+    <string name="accessibility_service_label">Deep Solver AI Assistant</string>
+    <string name="status_ready_description">Ready to help you solve MCQs</string>
+    <string name="status_icon_desc">Status Icon</string>
+</resources>
