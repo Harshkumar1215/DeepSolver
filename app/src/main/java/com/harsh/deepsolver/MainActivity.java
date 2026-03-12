@@ -35,13 +35,11 @@ public class MainActivity extends AppCompatActivity {
     // Launcher to handle the result of the Overlay permission request
     private final ActivityResultLauncher<Intent> overlayPermissionLauncher =
             registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    if (Settings.canDrawOverlays(this)) {
-                        // Re-check permissions after returning from settings
-                        checkAndRequestPermissions();
-                    } else {
-                        Toast.makeText(this, "Overlay permission is required", Toast.LENGTH_SHORT).show();
-                    }
+                if (Settings.canDrawOverlays(this)) {
+                    // Re-check permissions after returning from settings
+                    checkAndRequestPermissions();
+                } else {
+                    Toast.makeText(this, "Overlay permission is required", Toast.LENGTH_SHORT).show();
                 }
             });
 
@@ -59,16 +57,13 @@ public class MainActivity extends AppCompatActivity {
         btnToggleService.setOnClickListener(v -> checkAndRequestPermissions());
         
         // Auto-check on launch to prompt user if permissions are missing
-        if (canDrawOverlays() || !isAccessibilityServiceEnabled()) {
+        if (!canDrawOverlays() || !isAccessibilityServiceEnabled()) {
             checkAndRequestPermissions();
         }
     }
 
     private boolean canDrawOverlays() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            return Settings.canDrawOverlays(this);
-        }
-        return true;
+        return Settings.canDrawOverlays(this);
     }
 
     /**
@@ -119,11 +114,9 @@ public class MainActivity extends AppCompatActivity {
      * Redirects the user to the system settings to grant Overlay permission.
      */
     private void requestOverlayPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:" + getPackageName()));
-            overlayPermissionLauncher.launch(intent);
-        }
+        Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:" + getPackageName()));
+        overlayPermissionLauncher.launch(intent);
     }
 
     /**
@@ -143,7 +136,7 @@ public class MainActivity extends AppCompatActivity {
         final String service = getPackageName() + "/" + DeepSolverAccessibilityService.class.getCanonicalName();
         try {
             accessibilityEnabled = Settings.Secure.getInt(
-                    getApplicationContext().getContentResolver(),
+                    getContentResolver(),
                     android.provider.Settings.Secure.ACCESSIBILITY_ENABLED);
         } catch (Settings.SettingNotFoundException e) {
             return false;
@@ -152,7 +145,7 @@ public class MainActivity extends AppCompatActivity {
 
         if (accessibilityEnabled == 1) {
             String settingValue = Settings.Secure.getString(
-                    getApplicationContext().getContentResolver(),
+                    getContentResolver(),
                     Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
             if (settingValue != null) {
                 mStringColonSplitter.setString(settingValue);
@@ -194,17 +187,13 @@ public class MainActivity extends AppCompatActivity {
             btnToggleService.setText(R.string.stop_service);
             btnToggleService.setIconResource(android.R.drawable.ic_media_pause);
             ivStatusIcon.setImageResource(android.R.drawable.ic_dialog_info);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                ivStatusIcon.setImageTintList(ColorStateList.valueOf(Color.parseColor("#4CAF50")));
-            }
+            ivStatusIcon.setImageTintList(ColorStateList.valueOf(Color.parseColor("#4CAF50")));
         } else {
             tvStatus.setText(R.string.status_stopped);
             btnToggleService.setText(R.string.start_service);
             btnToggleService.setIconResource(android.R.drawable.ic_media_play);
             ivStatusIcon.setImageResource(android.R.drawable.ic_lock_idle_low_battery);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                ivStatusIcon.setImageTintList(ColorStateList.valueOf(Color.parseColor("#6c757d")));
-            }
+            ivStatusIcon.setImageTintList(ColorStateList.valueOf(Color.parseColor("#6c757d")));
         }
     }
 
