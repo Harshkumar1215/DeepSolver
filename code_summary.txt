@@ -1,0 +1,417 @@
+================================================================================
+                                DEEP SOLVER - COMPLETE CODE SUMMARY
+================================================================================
+Developer: HARSH KUMAR
+Language: Java (Android)
+Libraries: Jsoup, Material Components, Android Accessibility Service
+================================================================================
+
+--------------------------------------------------------------------------------
+1. AndroidManifest.xml
+--------------------------------------------------------------------------------
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.DeepSolver">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".DeepSolverAccessibilityService"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <service
+            android:name=".OverlayService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
+
+    </application>
+</manifest>
+
+--------------------------------------------------------------------------------
+2. MainActivity.java
+--------------------------------------------------------------------------------
+package com.harsh.deepsolver;
+
+import android.content.Context;
+import android.content.Intent;
+import android.content.res.ColorStateList;
+import android.graphics.Color;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.provider.Settings;
+import android.text.TextUtils;
+import android.widget.ImageView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+
+import com.google.android.material.button.MaterialButton;
+
+/**
+ * MainActivity manages permissions and service initialization.
+ */
+public class MainActivity extends AppCompatActivity {
+
+    private MaterialButton btnToggleService;
+    private TextView tvStatus;
+    private ImageView ivStatusIcon;
+
+    private final ActivityResultLauncher<Intent> overlayPermissionLauncher =
+            registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+                if (Settings.canDrawOverlays(this)) checkAndRequestPermissions();
+            });
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        tvStatus = findViewById(R.id.tv_status);
+        btnToggleService = findViewById(R.id.btn_toggle_service);
+        ivStatusIcon = findViewById(R.id.iv_status_icon);
+
+        btnToggleService.setOnClickListener(v -> checkAndRequestPermissions());
+
+        if (!Settings.canDrawOverlays(this) || !isAccessibilityServiceEnabled()) {
+            checkAndRequestPermissions();
+        }
+    }
+
+    private void checkAndRequestPermissions() {
+        if (!Settings.canDrawOverlays(this)) {
+            showPermissionRationale("Overlay Permission",
+                "Required to show answers over other apps.",
+                this::requestOverlayPermission);
+        } else if (!isAccessibilityServiceEnabled()) {
+            showPermissionRationale("Accessibility Service",
+                "Required to read MCQs from your screen.",
+                this::requestAccessibilityPermission);
+        } else {
+            toggleService();
+        }
+    }
+
+    private void showPermissionRationale(String title, String message, Runnable onConfirm) {
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("Grant", (dialog, which) -> onConfirm.run())
+                .setNegativeButton("Cancel", null)
+                .create().show();
+    }
+
+    private void requestOverlayPermission() {
+        Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:" + getPackageName()));
+        overlayPermissionLauncher.launch(intent);
+    }
+
+    private void requestAccessibilityPermission() {
+        Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+        startActivity(intent);
+    }
+
+    private boolean isAccessibilityServiceEnabled() {
+        final String service = getPackageName() + "/" + DeepSolverAccessibilityService.class.getCanonicalName();
+        try {
+            int accessibilityEnabled = Settings.Secure.getInt(getContentResolver(), Settings.Secure.ACCESSIBILITY_ENABLED);
+            if (accessibilityEnabled == 1) {
+                String settingValue = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+                if (settingValue != null) {
+                    TextUtils.SimpleStringSplitter splitter = new TextUtils.SimpleStringSplitter(':');
+                    splitter.setString(settingValue);
+                    while (splitter.hasNext()) {
+                        if (splitter.next().equalsIgnoreCase(service)) return true;
+                    }
+                }
+            }
+        } catch (Settings.SettingNotFoundException ignored) {}
+        return false;
+    }
+
+    private void toggleService() {
+        Intent intent = new Intent(this, OverlayService.class);
+        if (OverlayService.isRunning) {
+            stopService(intent);
+            updateStatus(false);
+        } else {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent);
+            } else {
+                startService(intent);
+            }
+            updateStatus(true);
+        }
+    }
+
+    private void updateStatus(boolean running) {
+        if (running) {
+            tvStatus.setText(R.string.status_running);
+            btnToggleService.setText(R.string.stop_service);
+            ivStatusIcon.setImageTintList(ColorStateList.valueOf(Color.parseColor("#4CAF50")));
+        } else {
+            tvStatus.setText(R.string.status_stopped);
+            btnToggleService.setText(R.string.start_service);
+            ivStatusIcon.setImageTintList(ColorStateList.valueOf(Color.parseColor("#6c757d")));
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        updateStatus(OverlayService.isRunning);
+    }
+}
+
+--------------------------------------------------------------------------------
+3. OverlayService.java
+--------------------------------------------------------------------------------
+package com.harsh.deepsolver;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Service;
+import android.content.Intent;
+import android.graphics.PixelFormat;
+import android.os.Build;
+import android.view.Gravity;
+import android.view.LayoutInflater;
+import android.view.MotionEvent;
+import android.view.View;
+import android.view.WindowManager;
+import android.widget.ImageView;
+import androidx.core.app.NotificationCompat;
+
+/**
+ * Manages the floating button overlay.
+ */
+public class OverlayService extends Service {
+
+    public static boolean isRunning = false;
+    public static boolean isReadingActive = false;
+    private WindowManager windowManager;
+    private View floatingButton;
+    private ImageView floatingIcon;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        isRunning = true;
+        startForegroundService();
+        initOverlay();
+    }
+
+    private void startForegroundService() {
+        String channelId = "DeepSolverService";
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(channelId, "Deep Solver Service", NotificationManager.IMPORTANCE_LOW);
+            getSystemService(NotificationManager.class).createNotificationChannel(channel);
+        }
+        Notification notification = new NotificationCompat.Builder(this, channelId)
+                .setContentTitle("Deep Solver").setContentText("Lens Mode is ready")
+                .setSmallIcon(R.mipmap.ic_launcher).build();
+        startForeground(1, notification);
+    }
+
+    private void initOverlay() {
+        windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        floatingButton = LayoutInflater.from(this).inflate(R.layout.layout_floating_button, null);
+        floatingIcon = floatingButton.findViewById(R.id.iv_floating_icon);
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
+        params.gravity = Gravity.TOP | Gravity.START;
+
+        floatingButton.setOnTouchListener(new View.OnTouchListener() {
+            private int initialX, initialY;
+            private float initialTouchX, initialTouchY;
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        initialX = params.x; initialY = params.y;
+                        initialTouchX = event.getRawX(); initialTouchY = event.getRawY();
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        params.x = initialX + (int) (event.getRawX() - initialTouchX);
+                        params.y = initialY + (int) (event.getRawY() - initialTouchY);
+                        windowManager.updateViewLayout(floatingButton, params);
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                        if (Math.abs(event.getRawX() - initialTouchX) < 10) toggleReading();
+                        return true;
+                }
+                return false;
+            }
+        });
+        windowManager.addView(floatingButton, params);
+    }
+
+    private void toggleReading() {
+        isReadingActive = !isReadingActive;
+        floatingIcon.setBackgroundResource(isReadingActive ? R.drawable.floating_bg_active : R.drawable.floating_bg);
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        isRunning = false;
+        if (floatingButton != null) windowManager.removeView(floatingButton);
+    }
+}
+
+--------------------------------------------------------------------------------
+4. DeepSolverAccessibilityService.java - Enhanced MCQ Detection
+--------------------------------------------------------------------------------
+package com.harsh.deepsolver;
+
+import android.accessibilityservice.AccessibilityService;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityEvent;
+import org.jsoup.Jsoup;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Pattern;
+
+/**
+ * Enhanced MCQ Detection and Solver.
+ */
+public class DeepSolverAccessibilityService extends AccessibilityService {
+
+    private class MCQQuestion {
+        String questionText;
+        List<String> options = new ArrayList<>();
+        boolean hasMultipleCorrect = false;
+        String questionType; // "single-choice", "multiple-choice", "true-false", etc.
+    }
+
+    // Enhanced screen parsing for MCQs
+    private MCQQuestion parseMCQFromScreen(AccessibilityNodeInfo rootNode) {
+        MCQQuestion mcq = new MCQQuestion();
+        List<String> allText = new ArrayList<>();
+        extractTextRecursively(rootNode, allText);
+
+        boolean inOptions = false;
+
+        for (String text : allText) {
+            // Check if this is a question (contains ? or longer than threshold)
+            if (text.contains("?") || (text.length() > 30 && !isOption(text))) {
+                mcq.questionText = text;
+                inOptions = true;
+            }
+            // Check if this is an option
+            else if (inOptions && isOption(text)) {
+                mcq.options.add(text.trim());
+            }
+            // Detect true/false questions
+            else if (text.matches("(?i).*true.*false.*") ||
+                     text.matches("(?i).*select.*correct.*")) {
+                mcq.questionType = "true-false";
+            }
+        }
+        return mcq;
+    }
+
+    private boolean isOption(String text) {
+        return text.matches("^[A-Za-z0-9][\\.\\)]\\s*.+") ||  // A), 1.
+               text.matches("^[\\(\\[][A-Za-z0-9][\\)\\]]\\s*.+") || // (a), [1]
+               text.matches("^[□○▪☐☑☒]\\s*.+") || // Checkbox/radio symbols
+               text.matches("(?i)^(true|false|yes|no)$"); // True/False
+    }
+
+    private void extractTextRecursively(AccessibilityNodeInfo node, List<String> list) {
+        if (node == null) return;
+        if (node.getText() != null) list.add(node.getText().toString());
+        for (int i = 0; i < node.getChildCount(); i++) extractTextRecursively(node.getChild(i), list);
+    }
+
+    @Override
+    public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (OverlayService.isReadingActive) {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            MCQQuestion mcq = parseMCQFromScreen(root);
+            if (mcq.questionText != null) solveQuestion(mcq.questionText);
+        }
+    }
+
+    private void solveQuestion(String query) {
+        new Thread(() -> {
+            try {
+                org.jsoup.nodes.Document doc = Jsoup.connect("https://www.google.com/search?q=" + query)
+                        .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                        .get();
+                // Extraction and UI update logic...
+            } catch (Exception ignored) {}
+        }).start();
+    }
+
+    @Override public void onInterrupt() {}
+}
+
+--------------------------------------------------------------------------------
+5. res/layout/layout_search_results.xml
+--------------------------------------------------------------------------------
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:layout_margin="8dp" app:cardCornerRadius="16dp" app:cardElevation="8dp">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:padding="16dp">
+        <TextView android:id="@+id/tv_search_results" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:textColor="#333333" />
+        <ProgressBar android:id="@+id/progress_bar" android:layout_width="32dp"
+            android:layout_height="32dp" android:layout_gravity="center" android:visibility="gone" />
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>
+
+--------------------------------------------------------------------------------
+6. build.gradle (app)
+--------------------------------------------------------------------------------
+dependencies {
+    implementation 'org.jsoup:jsoup:1.16.1'
+    implementation 'com.google.android.material:material:1.13.0'
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation 'androidx.constraintlayout:constraintlayout:2.2.1'
+}
+
+================================================================================
+SUMMARY END
+================================================================================

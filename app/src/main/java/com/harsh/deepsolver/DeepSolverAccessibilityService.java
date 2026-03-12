@@ -32,6 +32,7 @@ import org.jsoup.select.Elements;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * DeepSolverAccessibilityService - "Lens Mode"
@@ -48,6 +49,13 @@ public class DeepSolverAccessibilityService extends AccessibilityService impleme
     private boolean wasReadingActive = false;
     private View searchView;
     private WindowManager windowManager;
+
+    private class MCQQuestion {
+        String questionText;
+        List<String> options = new ArrayList<>();
+        boolean hasMultipleCorrect = false;
+        String questionType; // "single-choice", "multiple-choice", "true-false", etc.
+    }
 
     @Override
     protected void onServiceConnected() {
@@ -79,20 +87,85 @@ public class DeepSolverAccessibilityService extends AccessibilityService impleme
             service.clearHighlights();
             showToast("Scanning for Question...");
             
-            // Collect all text from screen
-            List<String> textBlocks = new ArrayList<>();
-            collectText(rootNode, textBlocks);
+            MCQQuestion mcq = parseMCQFromScreen(rootNode);
             
-            // Find the most likely question (usually the longest block or one containing '?')
-            String questionText = identifyQuestion(textBlocks);
-            
-            if (!questionText.isEmpty()) {
-                performBackgroundSearch(questionText);
+            if (mcq.questionText != null && !mcq.questionText.isEmpty()) {
+                String searchQuery = buildMCQSearchQuery(mcq);
+                performBackgroundSearch(searchQuery);
             } else {
                 showToast("Could not find a question on screen.");
             }
         }
         rootNode.recycle();
+    }
+
+    /**
+     * Enhanced screen parsing for MCQs
+     */
+    private MCQQuestion parseMCQFromScreen(AccessibilityNodeInfo rootNode) {
+        MCQQuestion mcq = new MCQQuestion();
+        List<String> allText = new ArrayList<>();
+        collectText(rootNode, allText);
+        
+        boolean inOptions = false;
+        
+        for (String text : allText) {
+            // Check if this is a question (contains ? or longer than threshold)
+            if (text.contains("?") || (text.length() > 30 && !isOption(text))) {
+                mcq.questionText = text;
+                inOptions = true;
+            }
+            // Check if this is an option
+            else if (inOptions && isOption(text)) {
+                mcq.options.add(text.trim());
+            }
+            // Detect true/false questions
+            else if (text.matches("(?i).*true.*false.*") || 
+                     text.matches("(?i).*select.*correct.*")) {
+                mcq.questionType = "true-false";
+            }
+        }
+        
+        return mcq;
+    }
+
+    private boolean isOption(String text) {
+        return text.matches("^[A-Za-z0-9][\\.\\)]\\s*.+") ||  // A), 1.
+               text.matches("^[\\(\\[][A-Za-z0-9][\\)\\]]\\s*.+") || // (a), [1]
+               text.matches("^[□○▪☐☑☒]\\s*.+") || // Checkbox/radio symbols
+               text.matches("(?i)^(true|false|yes|no)$"); // True/False
+    }
+
+    /**
+     * Improved Search Query Formation
+     */
+    private String buildMCQSearchQuery(MCQQuestion mcq) {
+        StringBuilder query = new StringBuilder();
+        
+        // Add question text (clean and truncate)
+        String cleanQuestion = mcq.questionText
+            .replaceAll("[^a-zA-Z0-9\\s\\?]", " ")
+            .replaceAll("\\s+", " ")
+            .trim();
+        
+        // Take first 100 chars for question
+        if (cleanQuestion.length() > 100) {
+            cleanQuestion = cleanQuestion.substring(0, 100);
+        }
+        
+        query.append(cleanQuestion);
+        
+        // Add first few options for context
+        if (!mcq.options.isEmpty()) {
+            query.append(" ");
+            for (int i = 0; i < Math.min(2, mcq.options.size()); i++) {
+                String opt = mcq.options.get(i).replaceAll("[^a-zA-Z0-9\\s]", " ").trim();
+                if (opt.length() > 20) opt = opt.substring(0, 20);
+                query.append(opt).append(" ");
+            }
+        }
+        
+        return query.toString().trim();
     }
 
     /**
@@ -112,39 +185,6 @@ public class DeepSolverAccessibilityService extends AccessibilityService impleme
         for (int i = 0; i < node.getChildCount(); i++) {
             collectText(node.getChild(i), textBlocks);
         }
-    }
-
-    /**
-     * Identifies the most likely question from collected text blocks.
-     */
-    private String identifyQuestion(List<String> textBlocks) {
-        if (textBlocks.isEmpty()) return "";
-        
-        String bestQuestion = "";
-        
-        // Priority 1: Text containing a question mark
-        for (String text : textBlocks) {
-            if (text.contains("?")) {
-                if (text.length() > bestQuestion.length()) {
-                    bestQuestion = text;
-                }
-            }
-        }
-        
-        // Priority 2: The longest text block (likely the question body)
-        if (bestQuestion.isEmpty()) {
-            for (String text : textBlocks) {
-                if (text.length() > bestQuestion.length()) {
-                    bestQuestion = text;
-                }
-            }
-        }
-        
-        // If we have multiple blocks, maybe they are question + options
-        // Combine them if they are small and numerous? 
-        // For now, let's just use the best candidate.
-        
-        return bestQuestion;
     }
 
     /**
