@@ -24,12 +24,12 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
+
+import java.io.IOException;
 
 /**
  * DeepSolverAccessibilityService - "Lens Mode"
@@ -134,73 +134,63 @@ public class DeepSolverAccessibilityService extends AccessibilityService impleme
     }
 
     /**
-     * Performs Google search and extracts text results
+     * Performs Google search and extracts text results using Jsoup
      */
     private String doBackgroundSearch(String query) {
         try {
-            String searchUrl = "https://www.google.com/search?q=" + Uri.encode(query) + "&num=10";
+            String searchUrl = "https://www.google.com/search?q=" + Uri.encode(query);
             
-            URL url = new URL(searchUrl);
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-            connection.setRequestMethod("GET");
-            connection.setRequestProperty("User-Agent", USER_AGENT);
-            connection.setConnectTimeout(10000);
-            connection.setReadTimeout(10000);
+            Document doc = Jsoup.connect(searchUrl)
+                    .userAgent(USER_AGENT)
+                    .timeout(10000)
+                    .get();
             
-            int responseCode = connection.getResponseCode();
-            Log.d(TAG, "Search Response Code: " + responseCode);
+            return extractSearchResults(doc);
             
-            if (responseCode == HttpURLConnection.HTTP_OK) {
-                BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(connection.getInputStream()));
-                
-                StringBuilder response = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    response.append(line);
-                }
-                reader.close();
-                
-                // Extract title and snippet from HTML
-                return extractSearchResults(response.toString());
-            }
-            
-            connection.disconnect();
-            return "Search failed. Response code: " + responseCode;
-            
-        } catch (Exception e) {
+        } catch (IOException e) {
             Log.e(TAG, "Search Error: " + e.getMessage());
             return "Error: " + e.getMessage();
         }
     }
 
     /**
-     * Extracts search result titles and snippets from HTML
+     * Extracts search result titles and snippets from HTML Document
      */
-    private String extractSearchResults(String html) {
+    private String extractSearchResults(Document doc) {
         StringBuilder results = new StringBuilder();
         
-        // Pattern to extract search result titles
-        Pattern altTitlePattern = Pattern.compile("<h3[^>]*>(.*?)</h3>");
+        // Try to find snippets (similar to the Python implementation)
+        // Google uses various classes, 'BNeawe s3v9rd AP7Wnd' is common for mobile snippets
+        Elements snippets = doc.select("div.BNeawe.s3v9rd.AP7Wnd");
         
-        // Extract titles
-        Matcher matcher = altTitlePattern.matcher(html);
-        int count = 0;
-        while (matcher.find() && count < 5) {
-            String title = matcher.group(1);
-            // Clean HTML tags
-            title = title.replaceAll("<[^>]+>", "").trim();
-            if (!title.isEmpty() && title.length() > 5) {
-                results.append(count + 1).append(". ").append(title).append("\n\n");
-                count++;
+        if (!snippets.isEmpty()) {
+            int count = 0;
+            for (Element snippet : snippets) {
+                String text = snippet.text().trim();
+                if (text.length() > 20) {
+                    results.append(text).append("\n\n---\n\n");
+                    count++;
+                }
+                if (count >= 3) break; // Show top 3 results
             }
         }
         
         if (results.length() == 0) {
-            // Fallback: show Google Search link
-            results.append("Tap to open Google Search\n\n");
-            results.append("Search query captured!\n");
-            results.append("Open WebView for full results?");
+            // Fallback to titles if no snippets found
+            Elements titles = doc.select("h3");
+            int count = 0;
+            for (Element title : titles) {
+                String text = title.text().trim();
+                if (!text.isEmpty()) {
+                    results.append(count + 1).append(". ").append(text).append("\n\n");
+                    count++;
+                }
+                if (count >= 5) break;
+            }
+        }
+        
+        if (results.length() == 0) {
+            results.append("No clear answer found. Try selecting more specific text.");
         }
         
         return results.toString();
@@ -332,4 +322,3 @@ public class DeepSolverAccessibilityService extends AccessibilityService impleme
         closeFloatingSearch();
     }
 }
-

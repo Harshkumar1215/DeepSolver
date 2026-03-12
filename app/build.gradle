@@ -33,6 +33,9 @@ dependencies {
     implementation platform('com.google.firebase:firebase-bom:34.10.0')
     implementation 'com.google.firebase:firebase-analytics'
 
+    // Jsoup for HTML parsing (Java alternative to BeautifulSoup)
+    implementation 'org.jsoup:jsoup:1.16.1'
+
     implementation libs.appcompat
     implementation libs.material
     implementation libs.activity
