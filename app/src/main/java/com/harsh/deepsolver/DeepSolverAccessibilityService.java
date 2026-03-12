@@ -1,9 +1,12 @@
 package com.harsh.deepsolver;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.accessibilityservice.AccessibilityService;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.graphics.Color;
 import android.graphics.Outline;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
@@ -34,25 +37,23 @@ import org.jsoup.select.Elements;
 
 import java.io.IOException;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 
 /**
  * DeepSolverAccessibilityService - Enhanced Version
- * Handles automatic MCQ detection and answer retrieval
+ * Handles automatic MCQ detection and answer retrieval with visual scanning effects.
  */
-public class DeepSolverAccessibilityService extends AccessibilityService {
+public class DeepSolverAccessibilityService extends AccessibilityService implements OverlayService.OnHighlightClickListener {
 
     private static final String TAG = "DeepSolverEnhanced";
     private static final int FLOATING_WINDOW_HEIGHT = 700;
@@ -91,10 +92,9 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
     private boolean wasReadingActive = false;
     private View searchView;
     private WindowManager windowManager;
-    private SharedPreferences prefs;
 
+    // Visual highlights management
     private final List<View> highlightOverlays = new ArrayList<>();
-    private int currentHighlightIndex = 0;
     private ValueAnimator pulseAnimator;
 
     // Cache for recent answers to avoid repeated searches
@@ -102,7 +102,7 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
     private static final int CACHE_SIZE = 20;
     private static final long CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
 
-    private class CachedAnswer {
+    private static class CachedAnswer {
         String answer;
         long timestamp;
 
@@ -116,16 +116,14 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
         }
     }
 
-    private class MCQQuestion {
+    private static class MCQQuestion {
         String questionText = "";
         List<String> options = new ArrayList<>();
-        List<String> correctAnswers = new ArrayList<>();
         boolean hasMultipleCorrect = false;
         String questionType = "unknown"; // single-choice, multiple-choice, true-false, fill-blank, math
-        int confidenceScore = 0;
     }
 
-    private class AnswerCandidate implements Comparable<AnswerCandidate> {
+    private static class AnswerCandidate implements Comparable<AnswerCandidate> {
         String text;
         String source;
         double score;
@@ -143,11 +141,20 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
         }
     }
 
+    private static class TextNodeInfo {
+        Rect bounds;
+        String text;
+
+        TextNodeInfo(Rect bounds, String text) {
+            this.bounds = bounds;
+            this.text = text;
+        }
+    }
+
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
         windowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
-        prefs = getSharedPreferences("DeepSolverPrefs", MODE_PRIVATE);
         Log.d(TAG, "Enhanced Deep Solver Service Connected");
     }
 
@@ -158,42 +165,45 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
             return;
         }
 
-        if (!wasReadingActive && OverlayService.isReadingActive) {
+        if (!wasReadingActive) {
             wasReadingActive = true;
             performEnhancedLensScan();
         }
     }
 
     /**
-     * Main scanning method with enhanced detection
+     * Main scanning method with enhanced detection and visual effects
      */
     private void performEnhancedLensScan() {
         AccessibilityNodeInfo rootNode = getRootInActiveWindow();
         if (rootNode == null) return;
 
-        showToast("🔍 Scanning for MCQ...");
+        // Create scanning effect
+        createScanningEffect(rootNode);
 
         executorService.execute(() -> {
             MCQQuestion mcq = parseEnhancedMCQ(rootNode);
             rootNode.recycle();
 
             if (mcq.questionText.isEmpty()) {
-                showToast("❌ No question detected");
+                mainHandler.post(() -> {
+                    showToast("❌ No question detected");
+                    clearScanHighlights();
+                });
                 return;
             }
 
+            // Small delay to let the scanning effect be visible
+            try { Thread.sleep(1500); } catch (InterruptedException ignored) {}
+
             // Show detected question in popup
-            mainHandler.post(() -> {
-                showSearchPopup("📝 Question detected!\n\n" + mcq.questionText, true);
-            });
+            mainHandler.post(() -> showSearchPopup("📝 Question detected!\n\n" + mcq.questionText, true));
 
             // Check cache first
             String cacheKey = generateCacheKey(mcq);
             CachedAnswer cached = answerCache.get(cacheKey);
             if (cached != null && cached.isValid()) {
-                mainHandler.post(() -> {
-                    displayAnswerWithOptions(cached.answer, mcq);
-                });
+                mainHandler.post(() -> displayAnswerWithOptions(cached.answer, mcq));
                 return;
             }
 
@@ -205,16 +215,14 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
                 if (answerCache.size() >= CACHE_SIZE) {
                     // Remove oldest entry
                     String oldestKey = Collections.min(answerCache.entrySet(),
-                            (e1, e2) -> Long.compare(e1.getValue().timestamp, e2.getValue().timestamp)).getKey();
+                            Comparator.comparingLong(e -> e.getValue().timestamp)).getKey();
                     answerCache.remove(oldestKey);
                 }
                 answerCache.put(cacheKey, new CachedAnswer(answer));
             }
 
             String finalAnswer = (answer != null && !answer.isEmpty()) ? answer : "No answer found";
-            mainHandler.post(() -> {
-                displayAnswerWithOptions(finalAnswer, mcq);
-            });
+            mainHandler.post(() -> displayAnswerWithOptions(finalAnswer, mcq));
         });
     }
 
@@ -228,12 +236,12 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
 
         // Common option patterns
         Pattern[] optionPatterns = {
-                Pattern.compile("^[A-Z][\\.\\)]\\s*(.+)$"),           // A), A.
-                Pattern.compile("^[a-z][\\.\\)]\\s*(.+)$"),           // a), a.
-                Pattern.compile("^[0-9][\\.\\)]\\s*(.+)$"),           // 1), 1.
-                Pattern.compile("^[0-9]{2}[\\.\\)]\\s*(.+)$"),        // 10), 10.
-                Pattern.compile("^[\\(\\[]?[A-Za-z0-9][\\)\\]]?\\s*(.+)$"), // (a), [1]
-                Pattern.compile("^[○▪□○●]\\s*(.+)$"),                  // Symbol options
+                Pattern.compile("^[A-Z][.\\)]\\s*(.+)$"),           // A), A.
+                Pattern.compile("^[a-z][.\\)]\\s*(.+)$"),           // a), a.
+                Pattern.compile("^[0-9][.\\)]\\s*(.+)$"),           // 1), 1.
+                Pattern.compile("^[0-9]{2}[.\\)]\\s*(.+)$"),        // 10), 10.
+                Pattern.compile("^[([]?[A-Za-z0-9][)\\]]?\\s*(.+)$"), // (a), [1]
+                Pattern.compile("^[○▪□●]\\s*(.+)$"),                  // Symbol options
                 Pattern.compile("^(True|False|Yes|No)$", Pattern.CASE_INSENSITIVE)
         };
 
@@ -273,7 +281,7 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
             if (foundQuestion) {
                 for (Pattern pattern : optionPatterns) {
                     if (pattern.matcher(text).matches()) {
-                        String cleaned = cleanOptionText(text, pattern);
+                        String cleaned = pattern.matcher(text).replaceAll("$1").trim();
                         if (!tempOptions.contains(cleaned) && cleaned.length() > 1) {
                             tempOptions.add(cleaned);
                         }
@@ -296,23 +304,113 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
             }
         }
 
-        // Validate and add options
-        if (tempOptions.size() >= 2) {
+        if (!tempOptions.isEmpty()) {
             mcq.options = tempOptions;
-            mcq.confidenceScore = 100;
-        } else if (tempOptions.size() == 1) {
-            mcq.options = tempOptions;
-            mcq.confidenceScore = 50;
         }
 
         return mcq;
     }
 
     /**
-     * Clean option text by removing prefixes
+     * Creates a subtle scanning effect on text elements
      */
-    private String cleanOptionText(String text, Pattern pattern) {
-        return pattern.matcher(text).replaceAll("$1").trim();
+    private void createScanningEffect(AccessibilityNodeInfo rootNode) {
+        clearScanHighlights();
+        List<TextNodeInfo> textNodes = new ArrayList<>();
+        collectTextNodesWithBounds(rootNode, textNodes);
+        if (textNodes.isEmpty()) return;
+        for (TextNodeInfo nodeInfo : textNodes) {
+            createTextHighlight(nodeInfo.bounds);
+        }
+        startScanAnimation(textNodes.size());
+    }
+
+    private void collectTextNodesWithBounds(AccessibilityNodeInfo node, List<TextNodeInfo> textNodes) {
+        if (node == null) return;
+        CharSequence text = node.getText();
+        if (text != null && text.length() > 2 && node.isVisibleToUser()) {
+            Rect bounds = new Rect();
+            node.getBoundsInScreen(bounds);
+            if (bounds.width() > 20 && bounds.height() > 20) {
+                textNodes.add(new TextNodeInfo(bounds, text.toString()));
+            }
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            collectTextNodesWithBounds(node.getChild(i), textNodes);
+        }
+    }
+
+    private void createTextHighlight(Rect bounds) {
+        if (windowManager == null) return;
+        FrameLayout highlightView = new FrameLayout(this);
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setShape(GradientDrawable.RECTANGLE);
+        drawable.setCornerRadius(8f);
+        drawable.setColor(Color.parseColor("#3300BFFF"));
+        drawable.setStroke(2, Color.parseColor("#8000BFFF"));
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            highlightView.setElevation(4f);
+            highlightView.setOutlineProvider(new ViewOutlineProvider() {
+                @Override
+                public void getOutline(View view, Outline outline) {
+                    outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), 8f);
+                }
+            });
+            highlightView.setClipToOutline(true);
+        }
+        highlightView.setBackground(drawable);
+
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                bounds.width() + 20, bounds.height() + 10,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT);
+        params.gravity = Gravity.TOP | Gravity.START;
+        params.x = bounds.left - 10;
+        params.y = bounds.top - 5;
+
+        try {
+            windowManager.addView(highlightView, params);
+            highlightOverlays.add(highlightView);
+        } catch (Exception e) {
+            Log.e(TAG, "Highlight add error: " + e.getMessage());
+        }
+    }
+
+    private void startScanAnimation(int totalHighlights) {
+        if (highlightOverlays.isEmpty()) return;
+        if (pulseAnimator != null && pulseAnimator.isRunning()) pulseAnimator.cancel();
+        pulseAnimator = ValueAnimator.ofFloat(0, totalHighlights);
+        pulseAnimator.setDuration(totalHighlights * 200L);
+        pulseAnimator.setInterpolator(new AccelerateDecelerateInterpolator());
+        pulseAnimator.addUpdateListener(animation -> {
+            int currentIndex = (int) (float) animation.getAnimatedValue();
+            for (int i = 0; i < highlightOverlays.size(); i++) {
+                View overlay = highlightOverlays.get(i);
+                if (overlay != null) {
+                    float distance = Math.abs(i - currentIndex);
+                    overlay.setAlpha(distance < 1 ? 0.8f : (distance < 3 ? 0.3f : 0.1f));
+                }
+            }
+        });
+        pulseAnimator.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                for (View overlay : highlightOverlays) {
+                    overlay.animate().alpha(0f).setDuration(300).withEndAction(() -> clearScanHighlights()).start();
+                }
+            }
+        });
+        pulseAnimator.start();
+    }
+
+    private void clearScanHighlights() {
+        for (View overlay : highlightOverlays) {
+            try { windowManager.removeView(overlay); } catch (Exception ignored) {}
+        }
+        highlightOverlays.clear();
+        if (pulseAnimator != null && pulseAnimator.isRunning()) pulseAnimator.cancel();
     }
 
     /**
@@ -320,379 +418,189 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
      */
     private String searchAllEngines(MCQQuestion mcq) {
         List<AnswerCandidate> allCandidates = new ArrayList<>();
-
-        // Build search queries
         List<String> queries = buildSearchQueries(mcq);
 
         for (String query : queries) {
             for (String engine : SEARCH_ENGINES) {
                 try {
-                    String url = String.format(engine, URLEncoder.encode(query, "UTF-8"));
-                    List<AnswerCandidate> candidates = searchWithEngine(url, mcq);
-                    allCandidates.addAll(candidates);
-
-                    // Small delay to avoid rate limiting
-                    Thread.sleep(random.nextInt(1000) + 500);
+                    String url = String.format(engine, URLEncoder.encode(query, StandardCharsets.UTF_8.toString()));
+                    allCandidates.addAll(searchWithEngine(url, mcq));
+                    Thread.sleep(random.nextInt(500) + 200);
                 } catch (Exception e) {
                     Log.e(TAG, "Search error: " + e.getMessage());
                 }
             }
         }
 
-        // Sort and return best answer
         if (!allCandidates.isEmpty()) {
             Collections.sort(allCandidates);
             AnswerCandidate best = allCandidates.get(0);
-
-            // Format answer with confidence
             StringBuilder formattedAnswer = new StringBuilder();
             formattedAnswer.append("🎯 Best Answer (").append((int)(best.score * 100)).append("% confidence)\n");
-            formattedAnswer.append("Source: ").append(best.source).append("\n\n");
-            formattedAnswer.append(best.text);
-
+            formattedAnswer.append("Source: ").append(best.source).append("\n\n").append(best.text);
             if (best.matchedOption != null && !mcq.options.isEmpty()) {
                 formattedAnswer.append("\n\n✅ Matched Option: ").append(best.matchedOption);
             }
-
             return formattedAnswer.toString();
         }
-
         return null;
     }
 
-    /**
-     * Build multiple search queries for better coverage
-     */
     private List<String> buildSearchQueries(MCQQuestion mcq) {
         List<String> queries = new ArrayList<>();
         String baseQuestion = mcq.questionText.replaceAll("[^a-zA-Z0-9\\s]", " ").trim();
-
-        // Query 1: Direct question
         queries.add(baseQuestion);
-
-        // Query 2: Question + "answer"
-        queries.add(baseQuestion + " answer");
-
-        // Query 3: Question + "correct answer"
         queries.add(baseQuestion + " correct answer");
-
-        // Query 4: Question + "solution"
-        if (mcq.questionType.equals("math")) {
-            queries.add(baseQuestion + " solution step by step");
-        }
-
-        // Query 5: Question + first few options
+        if (mcq.questionType.equals("math")) queries.add(baseQuestion + " solution step by step");
         if (!mcq.options.isEmpty()) {
             String optionsStr = String.join(" ", mcq.options.subList(0, Math.min(2, mcq.options.size())));
             queries.add(baseQuestion + " " + optionsStr);
         }
-
         return queries;
     }
 
-    /**
-     * Search with specific engine and parse results
-     */
     private List<AnswerCandidate> searchWithEngine(String url, MCQQuestion mcq) throws IOException {
         List<AnswerCandidate> candidates = new ArrayList<>();
-
         String userAgent = USER_AGENTS[random.nextInt(USER_AGENTS.length)];
-
-        Document doc = Jsoup.connect(url)
-                .userAgent(userAgent)
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .header("Accept-Language", "en-US,en;q=0.5")
-                .header("Accept-Encoding", "gzip, deflate")
-                .header("DNT", "1")
-                .header("Connection", "keep-alive")
-                .header("Upgrade-Insecure-Requests", "1")
-                .timeout(15000)
-                .followRedirects(true)
-                .get();
-
-        String source = url.contains("google") ? "Google" :
-                (url.contains("bing") ? "Bing" : "DuckDuckGo");
-
-        // Try to find featured snippets/knowledge panels first
+        Document doc = Jsoup.connect(url).userAgent(userAgent).timeout(15000).followRedirects(true).get();
+        String source = url.contains("google") ? "Google" : (url.contains("bing") ? "Bing" : "DuckDuckGo");
         candidates.addAll(extractFeaturedSnippets(doc, mcq, source));
-
-        // Try to find answer from known educational sites
-        candidates.addAll(extractFromKnownSites(doc, mcq, source));
-
-        // Try regular search results
+        candidates.addAll(extractFromKnownSites(doc, mcq));
         candidates.addAll(extractSearchSnippets(doc, mcq, source));
-
         return candidates;
     }
 
-    /**
-     * Extract featured snippets (highest priority)
-     */
     private List<AnswerCandidate> extractFeaturedSnippets(Document doc, MCQQuestion mcq, String source) {
         List<AnswerCandidate> candidates = new ArrayList<>();
-
-        // Google featured snippet selectors
-        String[] featuredSelectors = {
-                "div[class*='LGOv1b']", "div[class*='kp-blk']", "div[class*='xpdopen']",
-                "div.BNeawe.s3v9rd.AP7Wnd", "div.hgKElc", "div.yD7M6",
-                "div[class*='IZ6rdc']", "div[class*='Z0LcW']", "div[class*='sXLaOe']"
-        };
-
+        String[] featuredSelectors = {"div[class*='LGOv1b']", "div[class*='kp-blk']", "div[class*='xpdopen']", "div.BNeawe.s3v9rd.AP7Wnd", "div.hgKElc", "div.yD7M6"};
         for (String selector : featuredSelectors) {
             Elements elements = doc.select(selector);
             for (Element elem : elements) {
                 String text = elem.text();
                 if (text.length() > 20 && text.length() < 1000) {
                     double score = calculateAnswerScore(text, mcq);
-                    if (score > 0.6) {
-                        candidates.add(new AnswerCandidate(text, source + " (Featured)", score));
-                    }
+                    if (score > 0.6) candidates.add(new AnswerCandidate(text, source + " (Featured)", score));
                 }
             }
         }
-
         return candidates;
     }
 
-    /**
-     * Extract from known educational/answer sites
-     */
-    private List<AnswerCandidate> extractFromKnownSites(Document doc, MCQQuestion mcq, String source) {
+    private List<AnswerCandidate> extractFromKnownSites(Document doc, MCQQuestion mcq) {
         List<AnswerCandidate> candidates = new ArrayList<>();
-
         for (Map.Entry<String, String> site : ANSWER_SITES.entrySet()) {
             if (doc.location().contains(site.getKey())) {
                 Elements answers = doc.select(site.getValue());
                 for (Element answer : answers) {
-                    String text = answer.text();
-                    double score = calculateAnswerScore(text, mcq) + 0.2; // Bonus for known site
-                    candidates.add(new AnswerCandidate(text, site.getKey(), score));
+                    double score = calculateAnswerScore(answer.text(), mcq) + 0.2;
+                    candidates.add(new AnswerCandidate(answer.text(), site.getKey(), score));
                 }
             }
         }
-
         return candidates;
     }
 
-    /**
-     * Extract from regular search result snippets
-     */
     private List<AnswerCandidate> extractSearchSnippets(Document doc, MCQQuestion mcq, String source) {
         List<AnswerCandidate> candidates = new ArrayList<>();
-
-        // Common search result selectors
-        String[] snippetSelectors = {
-                "div.VwiC3b", "span.hgKElc", "div.yD7M6",
-                "div.BNeawe.s3v9rd", "div[class*='g'] div[class*='st']",
-                "div[class*='result'] div[class*='snippet']"
-        };
-
+        String[] snippetSelectors = {"div.VwiC3b", "span.hgKElc", "div.yD7M6", "div.BNeawe.s3v9rd"};
         for (String selector : snippetSelectors) {
             Elements snippets = doc.select(selector);
             for (Element snippet : snippets) {
                 String text = snippet.text();
                 if (text.length() > 30 && text.length() < 500) {
                     double score = calculateAnswerScore(text, mcq);
-                    if (score > 0.3) {
-                        candidates.add(new AnswerCandidate(text, source + " (Search)", score));
-                    }
+                    if (score > 0.3) candidates.add(new AnswerCandidate(text, source + " (Search)", score));
                 }
             }
         }
-
         return candidates;
     }
 
-    /**
-     * Calculate how well a text matches the MCQ
-     */
     private double calculateAnswerScore(String text, MCQQuestion mcq) {
         double score = 0.0;
         String lowerText = text.toLowerCase();
         String lowerQuestion = mcq.questionText.toLowerCase();
-
-        // Check if answer contains parts of the question
         String[] questionWords = lowerQuestion.split("\\s+");
         int matchedWords = 0;
-        for (String word : questionWords) {
-            if (word.length() > 3 && lowerText.contains(word)) {
-                matchedWords++;
-            }
-        }
+        for (String word : questionWords) if (word.length() > 3 && lowerText.contains(word)) matchedWords++;
         score += (double) matchedWords / questionWords.length * 0.3;
-
-        // Check if answer contains any options
         if (!mcq.options.isEmpty()) {
             double maxOptionScore = 0;
             for (String option : mcq.options) {
-                String lowerOption = option.toLowerCase();
-                if (lowerText.contains(lowerOption)) {
-                    // Check if option is mentioned as correct
-                    if (lowerText.contains("correct") || lowerText.contains("answer") ||
-                            lowerText.contains("right") || lowerText.contains("true")) {
-                        maxOptionScore = Math.max(maxOptionScore, 1.0);
-                    } else {
-                        maxOptionScore = Math.max(maxOptionScore, 0.7);
-                    }
+                if (lowerText.contains(option.toLowerCase())) {
+                    maxOptionScore = Math.max(maxOptionScore, (lowerText.contains("correct") || lowerText.contains("answer")) ? 1.0 : 0.7);
                 }
             }
             score += maxOptionScore * 0.5;
         }
-
-        // Bonus for containing answer indicators
-        String[] answerIndicators = {"answer", "correct", "solution", "therefore", "thus", "hence"};
-        for (String indicator : answerIndicators) {
-            if (lowerText.contains(indicator)) {
-                score += 0.1;
-                break;
-            }
-        }
-
-        // Penalty for very short answers
-        if (text.length() < 20) {
-            score *= 0.5;
-        }
-
         return Math.min(score, 1.0);
     }
 
-    /**
-     * Generate cache key for an MCQ
-     */
     private String generateCacheKey(MCQQuestion mcq) {
-        return mcq.questionText.substring(0, Math.min(50, mcq.questionText.length())) +
-                "|" + String.join("|", mcq.options);
+        return mcq.questionText.substring(0, Math.min(50, mcq.questionText.length())) + "|" + String.join("|", mcq.options);
     }
 
-    /**
-     * Display answer with options highlighted if matched
-     */
     private void displayAnswerWithOptions(String answer, MCQQuestion mcq) {
         closeFloatingSearch();
-
         if (!Settings.canDrawOverlays(this)) return;
-
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                FLOATING_WINDOW_HEIGHT,
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
-                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
-                        WindowManager.LayoutParams.TYPE_PHONE,
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
-                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                PixelFormat.TRANSLUCENT);
-
+                WindowManager.LayoutParams.MATCH_PARENT, FLOATING_WINDOW_HEIGHT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.BOTTOM;
-
         try {
             searchView = LayoutInflater.from(this).inflate(R.layout.layout_search_results, null);
-
             TextView tvQuestion = searchView.findViewById(R.id.tv_detected_question);
             TextView tvOptions = searchView.findViewById(R.id.tv_detected_options);
             TextView tvAnswer = searchView.findViewById(R.id.tv_search_results);
-            TextView tvConfidence = searchView.findViewById(R.id.tv_confidence);
-            ImageButton btnClose = searchView.findViewById(R.id.btn_close_results);
-            ProgressBar progressBar = searchView.findViewById(R.id.progress_bar);
-
-            // Show detected question
             if (tvQuestion != null) {
-                tvQuestion.setText("📝 Question: " + mcq.questionText);
+                tvQuestion.setText(mcq.questionText);
                 tvQuestion.setVisibility(View.VISIBLE);
             }
-
-            // Show detected options
             if (tvOptions != null && !mcq.options.isEmpty()) {
-                StringBuilder optionsText = new StringBuilder("🔘 Options detected:\n");
-                for (int i = 0; i < mcq.options.size(); i++) {
-                    optionsText.append("   ").append((char)('A' + i)).append(") ")
-                            .append(mcq.options.get(i)).append("\n");
-                }
-                tvOptions.setText(optionsText.toString());
+                tvOptions.setText(String.join(", ", mcq.options));
                 tvOptions.setVisibility(View.VISIBLE);
             }
-
-            // Show answer
-            if (tvAnswer != null) {
-                tvAnswer.setText(answer);
-            }
-
-            // Hide progress bar
-            if (progressBar != null) {
-                progressBar.setVisibility(View.GONE);
-            }
-
-            btnClose.setOnClickListener(v -> closeFloatingSearch());
-
+            if (tvAnswer != null) tvAnswer.setText(answer);
+            ProgressBar progressBar = searchView.findViewById(R.id.progress_bar);
+            if (progressBar != null) progressBar.setVisibility(View.GONE);
+            searchView.findViewById(R.id.btn_close_results).setOnClickListener(v -> closeFloatingSearch());
             windowManager.addView(searchView, params);
-
-        } catch (Exception e) {
-            Log.e(TAG, "Display error: " + e.getMessage());
-        }
+        } catch (Exception e) { Log.e(TAG, "Display error: " + e.getMessage()); }
     }
 
-    /**
-     * Show search popup with progress
-     */
     private void showSearchPopup(String message, boolean showProgress) {
         closeFloatingSearch();
-
         if (!Settings.canDrawOverlays(this)) return;
-
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                FLOATING_WINDOW_HEIGHT,
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
-                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
-                        WindowManager.LayoutParams.TYPE_PHONE,
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
-                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                PixelFormat.TRANSLUCENT);
-
+                WindowManager.LayoutParams.MATCH_PARENT, FLOATING_WINDOW_HEIGHT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.BOTTOM;
-
         try {
             searchView = LayoutInflater.from(this).inflate(R.layout.layout_search_results, null);
-
             TextView tvResults = searchView.findViewById(R.id.tv_search_results);
-            ImageButton btnClose = searchView.findViewById(R.id.btn_close_results);
             ProgressBar progressBar = searchView.findViewById(R.id.progress_bar);
-
             tvResults.setText(message);
-            progressBar.setVisibility(showProgress ? View.VISIBLE : View.GONE);
-
-            btnClose.setOnClickListener(v -> closeFloatingSearch());
-
+            if (progressBar != null) progressBar.setVisibility(showProgress ? View.VISIBLE : View.GONE);
+            searchView.findViewById(R.id.btn_close_results).setOnClickListener(v -> closeFloatingSearch());
             windowManager.addView(searchView, params);
-
-        } catch (Exception e) {
-            Log.e(TAG, "Popup error: " + e.getMessage());
-        }
+        } catch (Exception e) { Log.e(TAG, "Popup error: " + e.getMessage()); }
     }
 
-    /**
-     * Collect all text from node hierarchy
-     */
     private void collectAllText(AccessibilityNodeInfo node, List<String> textList) {
         if (node == null) return;
-
         CharSequence text = node.getText();
         if (text != null && text.length() > 2) {
             String cleanText = text.toString().trim();
-            if (!cleanText.isEmpty() && !textList.contains(cleanText)) {
-                textList.add(cleanText);
-            }
+            if (!cleanText.isEmpty() && !textList.contains(cleanText)) textList.add(cleanText);
         }
-
-        for (int i = 0; i < node.getChildCount(); i++) {
-            collectAllText(node.getChild(i), textList);
-        }
+        for (int i = 0; i < node.getChildCount(); i++) collectAllText(node.getChild(i), textList);
     }
 
     private void closeFloatingSearch() {
         if (searchView != null && windowManager != null) {
-            try {
-                windowManager.removeView(searchView);
-            } catch (Exception ignored) {}
+            try { windowManager.removeView(searchView); } catch (Exception ignored) {}
             searchView = null;
         }
     }
@@ -701,13 +609,12 @@ public class DeepSolverAccessibilityService extends AccessibilityService {
         mainHandler.post(() -> Toast.makeText(getApplicationContext(), message, Toast.LENGTH_SHORT).show());
     }
 
-    @Override
-    public void onInterrupt() {}
-
-    @Override
-    public void onDestroy() {
+    @Override public void onHighlightClick(String text) { performEnhancedLensScan(); }
+    @Override public void onInterrupt() {}
+    @Override public void onDestroy() {
         super.onDestroy();
         closeFloatingSearch();
+        clearScanHighlights();
         executorService.shutdown();
     }
 }
