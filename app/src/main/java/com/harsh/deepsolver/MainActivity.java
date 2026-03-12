@@ -24,9 +24,6 @@ import com.google.android.material.button.MaterialButton;
  */
 public class MainActivity extends AppCompatActivity {
 
-    // API Key for Gemini AI integration (used in Accessibility Service)
-    private static final String GEMINI_API_KEY = "AIzaSyA-RmTSfRSsOMs5ztMceLJqn9u8Q4dKIbY";
-    
     // UI components
     private MaterialButton btnToggleService;
     private TextView tvStatus;
