@@ -148,34 +148,10 @@ public class OverlayService extends Service {
 
     /**
      * Adds an interactive selection dot at text coordinates.
+     * (Deprecated: Logic moved to automatic detection)
      */
     public void addLensDot(int x, int y, final String text, final OnHighlightClickListener listener) {
-        if (!isReadingActive) return;
-
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                70, 70, // Slightly larger for easier tapping
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
-                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
-                        WindowManager.LayoutParams.TYPE_PHONE,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                PixelFormat.TRANSLUCENT);
-
-        params.gravity = Gravity.TOP | Gravity.START;
-        params.x = x - 35;
-        params.y = y - 35;
-
-        View dot = new View(this);
-        dot.setBackgroundResource(R.drawable.green_dot);
-        dot.setAlpha(0.8f);
-        
-        dot.setOnClickListener(v -> {
-            if (listener != null) listener.onHighlightClick(text);
-        });
-
-        try {
-            windowManager.addView(dot, params);
-            highlightViews.add(dot);
-        } catch (Exception ignored) {}
+        // Dot logic removed as requested for direct display
     }
 
     @Override

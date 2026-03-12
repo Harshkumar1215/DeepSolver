@@ -30,17 +30,19 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * DeepSolverAccessibilityService - "Lens Mode"
- * Scans screen, places interactive dots on text, and allows targeted searching.
- * Supports both WebView search and background text search.
+ * Scans screen, identifies the question automatically, and displays the answer directly.
  */
 public class DeepSolverAccessibilityService extends AccessibilityService implements OverlayService.OnHighlightClickListener {
 
     private static final String TAG = "DeepSolverLens";
-    private static final int FLOATING_WINDOW_HEIGHT = 600;
-    private static final String USER_AGENT = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36";
+    private static final int FLOATING_WINDOW_HEIGHT = 700;
+    // Updated User-Agent to be more modern and robust
+    private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean wasReadingActive = false;
@@ -51,7 +53,7 @@ public class DeepSolverAccessibilityService extends AccessibilityService impleme
     protected void onServiceConnected() {
         super.onServiceConnected();
         windowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
-        Log.d(TAG, "Lens Mode Active: Tap dots to search");
+        Log.d(TAG, "Lens Mode Active: Automatic Question Detection");
     }
 
     @Override
@@ -61,7 +63,7 @@ public class DeepSolverAccessibilityService extends AccessibilityService impleme
             return;
         }
 
-        // Trigger Lens Scan when button is toggled to Orange
+        // Trigger Lens Scan when button is toggled to Active
         if (!wasReadingActive && OverlayService.isReadingActive) {
             wasReadingActive = true;
             performLensScan();
@@ -75,52 +77,94 @@ public class DeepSolverAccessibilityService extends AccessibilityService impleme
         OverlayService service = OverlayService.getInstance();
         if (service != null) {
             service.clearHighlights();
-            showToast("Lens Scanning...");
-            scanAndAddDots(rootNode, service);
+            showToast("Scanning for Question...");
+            
+            // Collect all text from screen
+            List<String> textBlocks = new ArrayList<>();
+            collectText(rootNode, textBlocks);
+            
+            // Find the most likely question (usually the longest block or one containing '?')
+            String questionText = identifyQuestion(textBlocks);
+            
+            if (!questionText.isEmpty()) {
+                performBackgroundSearch(questionText);
+            } else {
+                showToast("Could not find a question on screen.");
+            }
         }
         rootNode.recycle();
     }
 
     /**
-     * Recursively finds text and places interactive dots.
+     * Recursively collects text from nodes.
      */
-    private void scanAndAddDots(AccessibilityNodeInfo node, OverlayService service) {
+    private void collectText(AccessibilityNodeInfo node, List<String> textBlocks) {
         if (node == null) return;
 
-        if (node.getText() != null && !node.getText().toString().trim().isEmpty()) {
-            Rect rect = new Rect();
-            node.getBoundsInScreen(rect);
-            
-            // Add a clickable Lens dot at the text location
-            String textToSearch = node.getText().toString().trim();
-            service.addLensDot(rect.centerX(), rect.centerY(), textToSearch, this);
+        CharSequence text = node.getText();
+        if (text != null && text.length() > 5) {
+            String cleanText = text.toString().trim();
+            if (!cleanText.isEmpty()) {
+                textBlocks.add(cleanText);
+            }
         }
 
         for (int i = 0; i < node.getChildCount(); i++) {
-            scanAndAddDots(node.getChild(i), service);
+            collectText(node.getChild(i), textBlocks);
         }
     }
 
     /**
-     * Triggered when a Lens Dot is clicked.
+     * Identifies the most likely question from collected text blocks.
+     */
+    private String identifyQuestion(List<String> textBlocks) {
+        if (textBlocks.isEmpty()) return "";
+        
+        String bestQuestion = "";
+        
+        // Priority 1: Text containing a question mark
+        for (String text : textBlocks) {
+            if (text.contains("?")) {
+                if (text.length() > bestQuestion.length()) {
+                    bestQuestion = text;
+                }
+            }
+        }
+        
+        // Priority 2: The longest text block (likely the question body)
+        if (bestQuestion.isEmpty()) {
+            for (String text : textBlocks) {
+                if (text.length() > bestQuestion.length()) {
+                    bestQuestion = text;
+                }
+            }
+        }
+        
+        // If we have multiple blocks, maybe they are question + options
+        // Combine them if they are small and numerous? 
+        // For now, let's just use the best candidate.
+        
+        return bestQuestion;
+    }
+
+    /**
+     * Required by interface but no longer used for dots.
      */
     @Override
     public void onHighlightClick(String text) {
-        String displayText = text.length() > 30 ? text.substring(0, 30) + "..." : text;
-        showToast("Searching: " + displayText);
         performBackgroundSearch(text);
     }
 
     /**
-     * Performs background search and shows results in popup (no WebView)
+     * Performs background search and shows results in popup
      */
     private void performBackgroundSearch(String queryText) {
         mainHandler.post(() -> {
             closeFloatingSearch();
             if (!Settings.canDrawOverlays(this)) return;
 
-            // Show loading popup first
-            showSearchPopup("Searching for: " + queryText, true);
+            // Show loading popup
+            showSearchPopup("Solving: " + (queryText.length() > 50 ? queryText.substring(0, 50) + "..." : queryText), true);
 
             // Perform search in background thread
             new Thread(() -> {
@@ -134,63 +178,73 @@ public class DeepSolverAccessibilityService extends AccessibilityService impleme
     }
 
     /**
-     * Performs Google search and extracts text results using Jsoup
+     * Performs Google search and extracts text results using robust Jsoup selectors
      */
     private String doBackgroundSearch(String query) {
         try {
+            // Encode the query correctly
             String searchUrl = "https://www.google.com/search?q=" + Uri.encode(query);
             
             Document doc = Jsoup.connect(searchUrl)
                     .userAgent(USER_AGENT)
-                    .timeout(10000)
+                    .referrer("https://www.google.com/")
+                    .timeout(15000)
+                    .followRedirects(true)
                     .get();
             
             return extractSearchResults(doc);
             
         } catch (IOException e) {
             Log.e(TAG, "Search Error: " + e.getMessage());
-            return "Error: " + e.getMessage();
+            return "Connection Error: Check your internet. " + e.getMessage();
+        } catch (Exception e) {
+            Log.e(TAG, "General Error: " + e.getMessage());
+            return "Unexpected Error: " + e.getMessage();
         }
     }
 
     /**
-     * Extracts search result titles and snippets from HTML Document
+     * Extracts search result snippets using multiple possible Google CSS selectors
      */
     private String extractSearchResults(Document doc) {
         StringBuilder results = new StringBuilder();
         
-        // Try to find snippets (similar to the Python implementation)
-        // Google uses various classes, 'BNeawe s3v9rd AP7Wnd' is common for mobile snippets
-        Elements snippets = doc.select("div.BNeawe.s3v9rd.AP7Wnd");
-        
-        if (!snippets.isEmpty()) {
-            int count = 0;
-            for (Element snippet : snippets) {
-                String text = snippet.text().trim();
-                if (text.length() > 20) {
-                    results.append(text).append("\n\n---\n\n");
-                    count++;
-                }
-                if (count >= 3) break; // Show top 3 results
+        // 1. Try Featured Snippet (Best for MCQs)
+        Element featured = doc.selectFirst("div.LGOv1b, div.kp-blk, div.xpdopen");
+        if (featured != null) {
+            String snippet = featured.text().trim();
+            if (!snippet.isEmpty()) {
+                results.append("★ BEST MATCH:\n").append(snippet).append("\n\n---\n\n");
             }
         }
+
+        // 2. Try common mobile/desktop snippet containers
+        // Google uses many different classes, so we try multiple common ones
+        Elements snippets = doc.select("div.BNeawe.s3v9rd.AP7Wnd, div.VwiC3b, span.hgKElc, div.yD7M6");
         
-        if (results.length() == 0) {
-            // Fallback to titles if no snippets found
-            Elements titles = doc.select("h3");
-            int count = 0;
+        int count = 0;
+        for (Element snippet : snippets) {
+            String text = snippet.text().trim();
+            if (text.length() > 30 && !results.toString().contains(text.substring(0, 20))) {
+                results.append(text).append("\n\n---\n\n");
+                count++;
+            }
+            if (count >= 3) break; 
+        }
+        
+        // 3. Fallback: Search result titles
+        if (results.length() < 50) {
+            Elements titles = doc.select("h3, div.vv770c");
             for (Element title : titles) {
                 String text = title.text().trim();
                 if (!text.isEmpty()) {
-                    results.append(count + 1).append(". ").append(text).append("\n\n");
-                    count++;
+                    results.append("• ").append(text).append("\n");
                 }
-                if (count >= 5) break;
             }
         }
         
         if (results.length() == 0) {
-            results.append("No clear answer found. Try selecting more specific text.");
+            return "No clear answer found. Google might be blocking the request or the question is too vague.";
         }
         
         return results.toString();
@@ -234,68 +288,19 @@ public class DeepSolverAccessibilityService extends AccessibilityService impleme
         }
     }
 
-    /**
-     * Updates search results in the popup
-     */
     private void updateSearchResults(String results) {
         if (searchView != null) {
             try {
                 ProgressBar progressBar = searchView.findViewById(R.id.progress_bar);
                 TextView tvResults = searchView.findViewById(R.id.tv_search_results);
                 
-                if (progressBar != null) {
-                    progressBar.setVisibility(View.GONE);
-                }
+                if (progressBar != null) progressBar.setVisibility(View.GONE);
+                if (tvResults != null) tvResults.setText(results);
                 
-                if (tvResults != null) {
-                    tvResults.setText(results);
-                }
             } catch (Exception e) {
                 Log.e(TAG, "Update Error: " + e.getMessage());
             }
         }
-    }
-
-    /**
-     * Opens WebView search as fallback
-     */
-    private void openFloatingSearch(String queryText) {
-        String searchUrl = "https://www.google.com/search?q=" + Uri.encode(queryText);
-
-        mainHandler.post(() -> {
-            closeFloatingSearch();
-
-            if (!Settings.canDrawOverlays(this)) return;
-
-            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    FLOATING_WINDOW_HEIGHT,
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
-                            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
-                            WindowManager.LayoutParams.TYPE_PHONE,
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                    PixelFormat.TRANSLUCENT);
-
-            params.gravity = Gravity.BOTTOM;
-
-            try {
-                searchView = LayoutInflater.from(this).inflate(R.layout.layout_floating_search, null);
-                WebView miniBrowser = searchView.findViewById(R.id.mini_browser);
-                ImageButton btnClose = searchView.findViewById(R.id.btn_close_search);
-
-                WebSettings webSettings = miniBrowser.getSettings();
-                webSettings.setJavaScriptEnabled(true);
-                webSettings.setDomStorageEnabled(true);
-                miniBrowser.setWebViewClient(new WebViewClient());
-                miniBrowser.loadUrl(searchUrl);
-
-                btnClose.setOnClickListener(v -> closeFloatingSearch());
-
-                windowManager.addView(searchView, params);
-            } catch (Exception e) {
-                Log.e(TAG, "Search Error: " + e.getMessage());
-            }
-        });
     }
 
     private void closeFloatingSearch() {
@@ -312,9 +317,7 @@ public class DeepSolverAccessibilityService extends AccessibilityService impleme
     }
 
     @Override
-    public void onInterrupt() {
-        closeFloatingSearch();
-    }
+    public void onInterrupt() {}
 
     @Override
     public void onDestroy() {
