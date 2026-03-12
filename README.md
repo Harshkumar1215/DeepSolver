@@ -3,70 +3,69 @@
 **Developer: HARSH KUMAR**
 
 ## 📱 Project Overview
-Deep Solver is an intelligent Android overlay application designed to help users solve Multiple Choice Questions (MCQs) in real-time. It runs as a floating service on top of other apps (like Chrome, PDF readers, or educational apps), reads the screen content using Accessibility Services, and uses Google's Gemini AI to identify and highlight the correct answer with a green dot.
+Deep Solver is an intelligent Android overlay application designed to help users solve Multiple Choice Questions (MCQs) in real-time. It runs as a floating service on top of other apps, automatically identifies questions on your screen using Accessibility Services, and retrieves answers using a built-in search engine powered by **Jsoup**.
+
+Unlike previous versions, it no longer requires manual selection; it detects questions automatically and displays the most relevant results directly in a clean, Material Design popup.
 
 ---
 
 ## 🚀 Key Features
 
-### 1. **Intelligent Overlay**
-- **Floating Button**: A moveable, semi-transparent icon that stays on top of any app.
-- **Visual Feedback**: The button changes its border color to indicate its state:
-  - **White Border**: Standby Mode (App is on but not reading).
-  - **Orange Border**: Active Mode (App is currently reading and solving).
-- **Non-Intrusive**: Draws highlights (green dots) on a transparent layer, ensuring no interference with the underlying app's functionality.
+### 1. **Automatic Question Detection (Lens Mode)**
+- **Smart Scanning**: Uses Accessibility APIs to traverse the screen and find text blocks containing question marks (`?`) or the most prominent text content.
+- **Floating Button**: A moveable icon that toggles the "Lens Mode".
+  - **Grey/Standard Icon**: Standby Mode.
+  - **Active Icon**: Scanning and Solving Mode.
 
-### 2. **AI-Powered Solving**
-- **Gemini 1.5 Flash Integration**: Uses Google's latest generative AI to understand complex questions and context.
-- **Universal Format Support**: Identifies MCQs in any format:
-    - Lettered (A, B, C, D)
-    - Numbered (1, 2, 3, 4)
-    - Plain text (next to checkboxes or radio buttons)
-- **Fuzzy Matching**: Capable of mapping AI text answers back to specific screen elements even with symbol or spacing differences.
+### 2. **Search Engine Powered Solving**
+- **Jsoup Integration**: A 100% Java-based implementation that scrapes Google Search results to find Featured Snippets and top relevant answers.
+- **Robust Parsing**: Extracts "Best Match" snippets, which are often direct answers to common MCQs.
+- **No Python Required**: Fully migrated from Chaquopy to native Java for better performance and smaller app size.
 
-### 3. **Smart Rate Limiting**
-- **10-Second Interval**: Automatically waits 10 seconds between solving requests to ensure smooth performance and manage API usage.
-- **User Toasts**: Real-time status updates like "Solving..." and "Answer Found!" keep the user informed.
+### 3. **Non-Intrusive Result Display**
+- **Direct Answer Popup**: No more hunting for dots. Answers appear in a scrollable Material Design card at the bottom of the screen.
+- **Clean UI**: Uses Material Design 3 components (`MaterialCardView`, `NestedScrollView`) for a modern look and feel.
 
 ### 4. **Privacy & Security**
-- **Guided Onboarding**: Explains why Accessibility and Overlay permissions are needed before requesting them.
-- **Local Context**: Processes screen text temporarily to find answers; no data is stored or shared.
+- **Guided Onboarding**: Explains why Accessibility and Overlay permissions are needed.
+- **Local Processing**: Processes screen text temporarily to perform searches; no data is stored or shared.
 
 ---
 
 ## 📂 Project Structure & Code Files
 
 ### 1. `MainActivity.java`
-The command center of the app.
-- Handles the **User Interface** (Material Design 3).
-- Manages **Permissions** (System Alert Window & Accessibility).
-- Provides shortcuts to **App Settings** for MIUI/Xiaomi users.
+- Manages the UI and initial setup.
+- Handles complex **Permissions** (Overlay & Accessibility) with a clean user-guided flow.
+- Automatically synchronizes with the service state.
 
 ### 2. `OverlayService.java`
-The visual layer of the app.
-- Runs as a **Foreground Service** to prevent the system from killing it.
-- Manages the **Floating Button** UI and its touch interactions (dragging/tapping).
-- Responsible for drawing the **Green Dot Highlights** at specific screen coordinates.
+- Runs as a **Foreground Service** with a persistent notification.
+- Manages the **Floating Button** UI and dragging logic.
+- Acts as a bridge between the screen content and the user interaction.
 
 ### 3. `DeepSolverAccessibilityService.java`
-The "brain" of the application.
-- Uses **Accessibility APIs** to traverse the view hierarchy and extract all screen text.
-- Connects to the **Gemini AI SDK** to process the extracted text.
-- Maps the AI's answer back to the **X and Y coordinates** on the user's screen.
+- The core logic for **Screen Text Extraction**.
+- Implements the **Automatic Question Identification** algorithm.
+- Handles the **Jsoup Web Scraping** logic on a background thread.
+- Manages the lifecycle of the **Result Popup Window**.
 
 ### 4. `AndroidManifest.xml`
-- Declares the required permissions: `INTERNET`, `SYSTEM_ALERT_WINDOW`, `FOREGROUND_SERVICE`.
-- Configures the **Accessibility Service** intent filters and meta-data.
+- Declares `INTERNET`, `SYSTEM_ALERT_WINDOW`, and `FOREGROUND_SERVICE` permissions.
+- Configures the Accessibility Service meta-data.
 
 ---
 
 ## 🛠️ Setup Instructions
-1.  **Firebase**: The app is integrated with Firebase. Ensure `google-services.json` is present in the `app/` directory.
-2.  **API Key**: The Gemini AI key is integrated within the `DeepSolverAccessibilityService.java` file.
-3.  **Permissions**:
+1.  **Dependencies**: The app uses `org.jsoup:jsoup` for web scraping. Ensure a successful Gradle sync.
+2.  **Permissions**:
     - Enable **Display over other apps** (Overlay).
     - Enable **Deep Solver AI Assistant** in Accessibility settings.
-    - (For Xiaomi) Enable **Display pop-up windows while running in the background**.
+    - (For Xiaomi/MIUI) Enable **Display pop-up windows while running in the background** in app info.
+3.  **Usage**:
+    - Open the app and click **Start Service**.
+    - Navigate to a question and tap the **Floating Icon**.
+    - View the answer in the popup and close it when done.
 
 ---
 **Deep Solver** - *Making learning and testing smarter.*
